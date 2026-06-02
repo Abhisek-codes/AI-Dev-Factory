@@ -12,13 +12,6 @@
 
 AI Dev Factory runs as a **Dual-Gate Agentic Workflow**:
 
-```text
-[PM Agent]
-	-> (Human Gate 1: PRD Approval)
-[System Architect]
-	-> (Human Gate 2: API Contract Approval)
-[Backend Engine & Frontend Engine]
-```
 
 ```mermaid
 flowchart LR
@@ -58,8 +51,68 @@ flowchart LR
 
 - **Python**
 - **FastAPI**
+- **Microsoft Agent Framework** (`agent-framework`, `agent-framework-openai`) for role-based Foundry-style agent execution
 - **Swarm Orchestrator** (multi-agent PM/Architect/Backend/Frontend/Dependency pipeline)
 - **FastAPI BackgroundTasks** for asynchronous downstream execution after contract approval
+
+## Foundry Agent Usage in the Backend Layer
+
+The backend uses a role-based agent runtime built on top of `agent-framework` + `agent-framework-openai`, with Azure OpenAI configured as the model endpoint.
+
+### Agent lifecycle and wiring
+
+- `backend/agents/__init__.py` exposes an `AgentFactory` that maps roles (`pm_agent`, `architect_agent`, `backend_agent`, `frontend_agent`, `dependency_agent`) to concrete agent builders.
+- Each agent builder in `backend/agents/*.py` loads role-specific instructions from `backend/agents/prompts/*.txt` and creates an `Agent(name=..., client=..., instructions=...)`.
+- The shared model client is created in `backend/core/azure_auth.py` via `OpenAIChatCompletionClient` using:
+	- `AZURE_OPENAI_ENDPOINT`
+	- `AZURE_OPENAI_DEPLOYMENT_NAME`
+	- `DefaultAzureCredential` + bearer token provider (`https://cognitiveservices.azure.com/.default`)
+
+This allows every role agent to share the same auth and model deployment while keeping behavior specialized through separate instruction prompts.
+
+### How agents are orchestrated
+
+`backend/core/orchestrator.py` instantiates all role agents once in `SwarmOrchestrator.__init__()` and then drives them through gated stages:
+
+1. PM agent generates PRD text.
+2. Architect agent generates API contract JSON.
+3. Backend agent generates backend code.
+4. Front-end agent generates frontend code.
+5. Dependency agent generates `requirements.txt`.
+
+The first two stages are human-gated via API workflow (`start` -> `approve-prd` -> `approve-contract`), then downstream generation runs asynchronously.
+
+### Invocation behavior and resilience
+
+- `_invoke_agent()` in the orchestrator supports multiple method names (`run`, `arun`, `invoke`, `ainvoke`, `complete`, `acomplete`, `chat`, `achat`, `generate`, `agenerate`) to stay compatible with agent implementations.
+- Returned values are normalized from common shapes (`content`, `text`, `message`, dict/list wrappers).
+- Network and endpoint connectivity failures are caught and rethrown as actionable `SwarmExecutionError` messages that include host-level troubleshooting guidance.
+
+### Prompt contracts and output normalization
+
+- PM output is normalized as plain text PRD.
+- Architect output is parsed as JSON (with code-block extraction fallback).
+- Backend and frontend outputs are expected as single code blocks and extracted before persistence.
+- Dependency output is sanitized to valid package lines only (deduplicated, third-party style names).
+
+### Artifact persistence pattern
+
+After each stage, artifacts are persisted to Azure Blob Storage under `session_id/` (for example: `prd.md`, `contract.json`, `main.py`, `app.py`, `requirements.txt`).
+
+- This supports resumable/gated execution between API calls.
+- Generated code artifacts can be shared via short-lived read-only SAS URLs.
+- The dashboard can fetch stage artifacts independently from long-running generation tasks.
+
+### Configuration requirements for agent execution
+
+For Foundry-style backend agent execution, these environment variables are required:
+
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `AZURE_STORAGE_ACCOUNT_URL`
+- `AZURE_STORAGE_CONTAINER_NAME`
+
+Without these values, agent invocation and artifact persistence will fail fast with explicit runtime errors.
 
 ### Deployment
 
