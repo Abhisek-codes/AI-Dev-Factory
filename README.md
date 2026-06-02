@@ -208,7 +208,7 @@ This runs the dashboard BFF (`server/bff-server.js`) so `/api/*` requests are pr
 
 The provided PowerShell deployment flow in `infrastructure/deploy.ps1` automates image build/push, container app updates, and role assignments.
 
-## Hackathon Value Proposition
+## Value Proposition
 
 Most AI code generators fail at reliability because they optimize for speed over control. **AI Dev Factory** flips that tradeoff:
 
